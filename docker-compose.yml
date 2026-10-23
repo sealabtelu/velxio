@@ -10,6 +10,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.standalone
+      # Arduino-only image (no QEMU / ESP-IDF, UI offers Uno/Nano/Mega):
+      # uncomment, then drop the ccache / velxio-build volumes below.
+      # See docs/wiki/board-allow-list.md.
+      # args:
+      #   VELXIO_PROFILE: arduino
     container_name: velxio-dev
     restart: unless-stopped
     ports:

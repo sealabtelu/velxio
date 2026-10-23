@@ -203,6 +203,12 @@ The git submodule pointers in this repo for `rp2040js` and `wokwi-elements` are 
 
 ### Stage 2: Final Production Image
 
+> Since the `VELXIO_PROFILE` build-arg was added, this stage is split into
+> `runtime-base` (shared), `runtime-arduino` and `runtime-full` (everything
+> ESP32: QEMU libs and their runtime deps, ESP-IDF, cmake/ninja/ccache). The
+> final image is `FROM runtime-${VELXIO_PROFILE}`. The description below is
+> the `full` profile. See [board-allow-list.md](board-allow-list.md).
+
 **Base image:** `python:3.12-slim`
 
 **Purpose:** The final, deployable image that contains everything needed to run Velxio.
@@ -808,6 +814,8 @@ healthcheck:
 | `VELXIO_BINARY_BASE_URL` | `https://velxio.dev/api/pro/license/downloads` | Gated endpoint serving the QEMU binaries and their GPL source |
 | `QEMU_RELEASE_URL` | (empty) | Legacy escape hatch: URL prefix for a private mirror of the binaries. Takes precedence when set |
 | `ESPIDF_IMAGE` | (unused, legacy) | Was used for external ESP-IDF image reference |
+| `VELXIO_PROFILE` | `full` | `arduino` skips the qemu-provider and espidf-builder stages and builds an Arduino-only image. See [board-allow-list.md](board-allow-list.md) |
+| `VITE_ENABLED_BOARDS` | (empty) | Frontend board allow-list. Empty means it follows the profile: `all` for `full`, `arduino` for `arduino`. See [board-allow-list.md](board-allow-list.md) |
 
 ---
 

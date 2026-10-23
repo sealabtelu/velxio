@@ -14,14 +14,22 @@ if [ -z "$SECRET_KEY" ]; then
     export SECRET_KEY="$(cat "$SECRET_FILE")"
 fi
 
+# Build profile baked in by Dockerfile.standalone (VELXIO_PROFILE build-arg).
+# `arduino` images ship no ESP32 toolchain or emulator, so the RP2040 and
+# ESP32 board indexes and cores are never fetched. Anything else = full.
+VELXIO_PROFILE="${VELXIO_PROFILE:-full}"
+echo "🧩 Velxio image profile: $VELXIO_PROFILE"
+
 # Ensure arduino-cli config and board manager URLs are set up
 if [ ! -f /root/.arduino15/arduino-cli.yaml ]; then
     echo "📦 Initializing arduino-cli config..."
     arduino-cli config init 2>/dev/null || true
-    arduino-cli config add board_manager.additional_urls \
-        https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json 2>/dev/null || true
-    arduino-cli config add board_manager.additional_urls \
-        https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json 2>/dev/null || true
+    if [ "$VELXIO_PROFILE" != "arduino" ]; then
+        arduino-cli config add board_manager.additional_urls \
+            https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json 2>/dev/null || true
+        arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json 2>/dev/null || true
+    fi
     # ATTinyCore (Spence Konde) — needed for ATtiny85 FQBNs.
     # Without this URL `core install ATTinyCore:avr` fails with
     #   "Platform 'ATTinyCore:avr' not found: platform not installed".
@@ -64,7 +72,9 @@ fi
 # the arduino-cli 3.x core below is only the fallback when ESP-IDF is absent.
 arduino-cli core update-index 2>/dev/null || true
 arduino-cli core install arduino:avr 2>/dev/null || true
-arduino-cli core install rp2040:rp2040 2>/dev/null || true
+if [ "$VELXIO_PROFILE" != "arduino" ]; then
+    arduino-cli core install rp2040:rp2040 2>/dev/null || true
+fi
 arduino-cli core install ATTinyCore:avr@1.4.1 2>/dev/null || true
 # STM32 (STMicroelectronics:stm32) is paid-only (velxio.dev + Velxio Desktop),
 # and the OSS image cannot emulate it at all, so its toolchain (xpack gcc
@@ -78,7 +88,9 @@ fi
 # ESP32 compilation now uses ESP-IDF instead of arduino-cli.
 # arduino-cli ESP32 core is no longer needed for QEMU-compatible builds.
 # If ESP-IDF is not available, fall back to arduino-cli ESP32 core.
-if [ -f /opt/esp-idf/export.sh ]; then
+if [ "$VELXIO_PROFILE" = "arduino" ]; then
+    echo "⏭️  Arduino profile — skipping ESP-IDF and the ESP32 core"
+elif [ -f /opt/esp-idf/export.sh ]; then
     echo "🔧 Sourcing ESP-IDF environment..."
     . /opt/esp-idf/export.sh || true
     echo "✅ ESP-IDF $(cat /opt/esp-idf/version.txt 2>/dev/null || echo 'unknown') ready"

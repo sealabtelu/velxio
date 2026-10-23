@@ -245,6 +245,11 @@ automatically.
 > also in Velxio Desktop with a paid plan); the self-hosted image does
 > not ship them.
 
+> **Only need Arduino?** Build with `--build-arg VELXIO_PROFILE=arduino`
+> for an image without QEMU or ESP-IDF that only offers the Uno, Nano and
+> Mega. For a manual setup, use `VITE_ENABLED_BOARDS=arduino`. See
+> [docs/wiki/board-allow-list.md](docs/wiki/board-allow-list.md).
+
 ---
 
 ### Option A: Docker (prebuilt image)

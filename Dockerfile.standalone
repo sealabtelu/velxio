@@ -1,3 +1,21 @@
+# ---- Build profile ----
+# Which boards the image can compile and emulate:
+#
+#   full     (default) every open-source board: Arduino AVR, ATtiny85,
+#            RP2040 and the ESP32 family (libqemu + ESP-IDF toolchain).
+#   arduino  Arduino Uno / Nano / Mega + ATtiny85 only. The qemu-provider and
+#            espidf-builder stages are never built (no license key, no
+#            multi-GB ESP-IDF clone), the frontend is built with
+#            VITE_ENABLED_BOARDS=arduino, and the entrypoint installs only
+#            the AVR cores at first boot.
+#
+#   docker build -f Dockerfile.standalone --build-arg VELXIO_PROFILE=arduino .
+#
+# Needs BuildKit (the default builder since Docker 23): the legacy builder
+# builds every stage whether or not the final image uses it.
+# See docs/wiki/board-allow-list.md.
+ARG VELXIO_PROFILE=full
+
 # ---- Stage 0: QEMU .so + ROM binaries ----
 # The Velxio runtime needs libqemu-xtensa.so + libqemu-riscv32.so (the
 # QEMU shared libraries that simulate ESP32 / ESP32-S3 / ESP32-C3) plus
@@ -155,6 +173,12 @@ RUN mkdir -p /root/.espressif/tools/mkspiffs/0.2.3/mkspiffs \
 # ---- Stage 1: Build frontend and third-party ----
 FROM node:20 AS frontend-builder
 
+ARG VELXIO_PROFILE
+# Board allow-list baked into the bundle (frontend/src/lib/enabledBoards.ts).
+# Empty = derived from VELXIO_PROFILE: every board for `full`, the Arduino
+# group for `arduino`. Pass it explicitly to pick your own list.
+ARG VITE_ENABLED_BOARDS=
+
 WORKDIR /app
 
 # avr8js, rp2040js and @wokwi/elements are pulled directly from the npm
@@ -174,13 +198,18 @@ WORKDIR /app/frontend
 RUN npm install -g npm@11 --no-audit --no-fund \
  && rm -f package-lock.json \
  && npm install --include=optional \
+ && if [ -z "$VITE_ENABLED_BOARDS" ] && [ "$VELXIO_PROFILE" = "arduino" ]; then \
+      export VITE_ENABLED_BOARDS=arduino ; \
+    fi \
+ && echo "[frontend] VITE_ENABLED_BOARDS=${VITE_ENABLED_BOARDS:-all}" \
  && npm run build:docker
 
 
-# ---- Stage 2: Final Production Image ----
-FROM python:3.12-slim
+# ---- Stage 2: Runtime shared by every profile ----
+FROM python:3.12-slim AS runtime-base
 
-# Install system dependencies and nginx.
+# Install system dependencies and nginx. The ESP32-only packages (libqemu
+# runtime deps, cmake/ninja/ccache for ESP-IDF) are added in runtime-full.
 #
 # No qemu-system-arm / qemu-utils here any more. They existed only for
 # app/services/qemu_manager.py (Raspberry Pi Linux emulation), which left
@@ -189,26 +218,11 @@ FROM python:3.12-slim
 # ~200 MB of image for a code path that no longer exists. velxio.dev
 # installs them in its own Dockerfile and Velxio Desktop downloads a QEMU
 # build on first use.
-#
-# libglib2.0-0, libgcrypt20, libslirp0, libpixman-1-0 and libfdt1 stay:
-# they are runtime deps of libqemu-xtensa.so (the in-process ESP32
-# emulator, which IS free and open-source) and used to arrive transitively
-# with qemu-system-arm. Dropping that package without keeping them listed
-# here would break every ESP32 simulation.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     nginx \
-    libglib2.0-0 \
-    libgcrypt20 \
-    libslirp0 \
-    libpixman-1-0 \
-    libfdt1 \
-    cmake \
-    ninja-build \
-    libusb-1.0-0 \
     git \
-    ccache \
     sdcc \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
@@ -292,6 +306,39 @@ COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 # Copy and configure entrypoint script (fix Windows CRLF → LF)
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+
+# ---- Stage 3a: Arduino-only runtime (VELXIO_PROFILE=arduino) ----
+# Nothing ESP32: no libqemu, no ESP-IDF, no ccache. The entrypoint reads
+# VELXIO_PROFILE and installs only the AVR cores at first boot.
+FROM runtime-base AS runtime-arduino
+ENV VELXIO_PROFILE=arduino
+# /app/data, /root/.arduino15, /root/Arduino — see the volume notes in
+# runtime-full below.
+VOLUME ["/app/data", "/root/.arduino15", "/root/Arduino"]
+
+
+# ---- Stage 3b: Full runtime (VELXIO_PROFILE=full, the default) ----
+FROM runtime-base AS runtime-full
+ENV VELXIO_PROFILE=full
+
+# libglib2.0-0, libgcrypt20, libslirp0, libpixman-1-0 and libfdt1 are
+# runtime deps of libqemu-xtensa.so (the in-process ESP32 emulator, which IS
+# free and open-source) and used to arrive transitively with
+# qemu-system-arm. Dropping them would break every ESP32 simulation.
+# cmake, ninja-build, libusb-1.0-0 and ccache serve ESP-IDF compiles.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgcrypt20 \
+    libslirp0 \
+    libpixman-1-0 \
+    libfdt1 \
+    cmake \
+    ninja-build \
+    libusb-1.0-0 \
+    ccache \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── ESP32 emulation: pre-built QEMU .so + ROM binaries ──────────────────────
 # Downloaded from GitHub Release (public — no access to qemu-lcgamboa needed)
@@ -424,6 +471,10 @@ RUN rm -rf /root/.espressif/python_env/idf5.5_* \
 # System-python IDF deps. IDF 5.x has no root requirements.txt (the 4.4
 # tree did); its equivalent is tools/requirements/requirements.core.txt.
 RUN pip install --no-cache-dir -r /opt/esp-idf-v5/tools/requirements/requirements.core.txt
+
+
+# ---- Final image: the runtime the profile picked ----
+FROM runtime-${VELXIO_PROFILE}
 
 EXPOSE 80
 

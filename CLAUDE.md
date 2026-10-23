@@ -422,6 +422,19 @@ and `components-metadata.json` is committed.
 The frontend-tests CI workflow only clones `wokwi-elements` (for the
 metadata staleness check), not the other two.
 
+### 8a. Arduino-only builds (board allow-list)
+
+- `VITE_ENABLED_BOARDS` (frontend, build-time): comma list of `BoardKind`s
+  and groups (`arduino`, `avr`), parsed in `frontend/src/lib/enabledBoards.ts`.
+  It filters the component picker, the New Project dialog and the examples
+  gallery. Unset means every board. It only scopes the UI; it is not a
+  security boundary.
+- `VELXIO_PROFILE` (Docker build-arg, `full` | `arduino`): `arduino` never
+  builds `qemu-provider` / `espidf-builder`, defaults `VITE_ENABLED_BOARDS`
+  to `arduino`, and `docker/entrypoint.sh` skips the RP2040/ESP32 cores.
+- New board-picking UI must call `isBoardEnabled()`.
+- Docs: `docs/wiki/board-allow-list.md`.
+
 ### 9. Backend Gotchas
 
 - **RP2040 board manager**: arduino-cli needs the earlephilhower URL before `rp2040:rp2040` install:
