@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { BoardKind } from '../../types/board';
 import { BOARD_KIND_LABELS } from '../../types/board';
 import { blockedByBoardGate, isProBoardKind } from '../../lib/proBoardGate';
+import { isBoardEnabled } from '../../lib/enabledBoards';
 import {
   listProBoards,
   subscribeProBoards,
@@ -232,22 +233,24 @@ export interface StarterSection {
 /**
  * The card sections, in display order. Overlay-registered kinds only exist
  * when the private overlay mounted — an OSS build simply doesn't show those
- * cards, and a section left with no entries is not rendered at all.
+ * cards, and a section left with no entries is not rendered at all. The same
+ * holds for kinds outside the build's VITE_ENABLED_BOARDS allow-list.
  */
 export function buildStarterSections(defs: ProBoardDef[]): StarterSection[] {
-  const oss = (k: BoardKind) => ({ kind: k as string, blurb: BOARD_BLURBS[k] ?? '' });
+  const oss = (k: BoardKind) =>
+    isBoardEnabled(k) ? [{ kind: k as string, blurb: BOARD_BLURBS[k] ?? '' }] : [];
   const pro = (k: string) => {
     const d = defs.find((x) => x.kind === k);
-    return d ? [{ kind: d.kind, blurb: d.description }] : [];
+    return d && isBoardEnabled(d.kind) ? [{ kind: d.kind, blurb: d.description }] : [];
   };
   return [
     {
       title: 'Arduino',
       entries: [
-        oss('arduino-uno'),
-        oss('arduino-mega'),
-        oss('arduino-nano'),
-        oss('arduino-nano-esp32'),
+        ...oss('arduino-uno'),
+        ...oss('arduino-mega'),
+        ...oss('arduino-nano'),
+        ...oss('arduino-nano-esp32'),
       ],
     },
     // One card per ESP32 chip generation, XIAO variant preferred where
@@ -258,11 +261,11 @@ export function buildStarterSections(defs: ProBoardDef[]): StarterSection[] {
     {
       title: 'ESP32',
       entries: [
-        oss('esp32'),
-        oss('esp32-cam'),
-        oss('xiao-esp32-s3'),
+        ...oss('esp32'),
+        ...oss('esp32-cam'),
+        ...oss('xiao-esp32-s3'),
         ...pro('xiao-esp32s3-sense'),
-        oss('xiao-esp32-c3'),
+        ...oss('xiao-esp32-c3'),
         ...pro('xiao-esp32c6'),
       ],
     },
@@ -294,15 +297,15 @@ export function buildStarterSections(defs: ProBoardDef[]): StarterSection[] {
         ...pro('esp-sensairshuttle'),
       ],
     },
-    { title: 'STM32', entries: STM32_BOARDS.map(oss) },
+    { title: 'STM32', entries: STM32_BOARDS.flatMap(oss) },
     {
       title: 'Raspberry Pi',
       entries: [
-        oss('raspberry-pi-pico'),
+        ...oss('raspberry-pi-pico'),
         ...pro('xiao-rp2040'),
-        oss('raspberry-pi-3'),
-        oss('raspberry-pi-4'),
-        oss('raspberry-pi-5'),
+        ...oss('raspberry-pi-3'),
+        ...oss('raspberry-pi-4'),
+        ...oss('raspberry-pi-5'),
       ],
     },
   ];

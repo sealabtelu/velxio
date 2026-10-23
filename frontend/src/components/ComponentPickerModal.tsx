@@ -33,6 +33,7 @@ interface CardHoverApi {
 import type { BoardKind } from '../types/board';
 import { BOARD_KIND_LABELS } from '../types/board';
 import { isProBoardKind } from '../lib/proBoardGate';
+import { isBoardAllowListActive, isBoardEnabled } from '../lib/enabledBoards';
 import { matchesSearch } from '../utils/searchMatch';
 import { boardSearchKeywords } from '../data/componentSearchKeywords';
 import {
@@ -389,9 +390,12 @@ export const ComponentPickerModal: React.FC<ComponentPickerModalProps> = ({
   );
 
 
-  // Boards list: static OSS kinds + overlay-registered boards (proBoardRegistry).
+  // Boards list: static OSS kinds + overlay-registered boards (proBoardRegistry),
+  // narrowed to the build's VITE_ENABLED_BOARDS allow-list when one is set.
   const allBoards = useMemo(() => {
-    return [...ALL_BOARDS, ...(listProBoards().map((d) => d.kind) as BoardKind[])];
+    return [...ALL_BOARDS, ...(listProBoards().map((d) => d.kind) as BoardKind[])].filter(
+      isBoardEnabled,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proBoardsVersion]);
 
@@ -1307,9 +1311,12 @@ const BoardCard: React.FC<BoardCardProps> = ({ kind, onSelect, hoverApi }) => {
 /** Recomputed on access (not module load): overlay board registration patches
  *  BOARD_KIND_LABELS at mount, which must hide the corresponding ad. */
 const visibleBoardAds = () =>
-  ONLINE_ONLY_BOARD_ADS.filter(
-    (ad) => !(ad.id in BOARD_KIND_LABELS) && !isOnlineOnlyAdSuppressed(ad.id),
-  );
+  // A build scoped to a board allow-list shows no other boards, ads included.
+  isBoardAllowListActive()
+    ? []
+    : ONLINE_ONLY_BOARD_ADS.filter(
+        (ad) => !(ad.id in BOARD_KIND_LABELS) && !isOnlineOnlyAdSuppressed(ad.id),
+      );
 
 /** Teal "ONLINE" pill: the board runs (free) in the hosted editor. */
 const OnlineBadge: React.FC = () => (

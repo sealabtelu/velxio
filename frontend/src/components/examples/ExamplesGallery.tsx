@@ -15,6 +15,7 @@ import {
 } from '../../data/examples';
 import { subscribeProBoards, getProBoardsVersion } from '../../lib/proBoardRegistry';
 import { BOARD_KIND_LABELS } from '../../types/board';
+import { isBoardAllowListActive, isBoardEnabled } from '../../lib/enabledBoards';
 import { parseSearchQuery, scoreSearch } from '../../utils/searchMatch';
 import { exampleSearchFields } from '../../utils/exampleSearch';
 import { ExampleThumbnail } from './ExampleThumbnail';
@@ -70,6 +71,19 @@ function getBoardFilter(example: ExampleProject): string {
   return example.boardType ?? 'arduino-uno';
 }
 
+/** Board kinds an example puts on the canvas (none for board-less circuits). */
+function exampleBoardKinds(example: ExampleProject): string[] {
+  if (example.boards) return example.boards.map((b) => b.boardKind);
+  const filter = (example as { boardFilter?: string }).boardFilter;
+  if (filter === 'analog' || filter === 'digital') return [];
+  return [example.boardType ?? 'arduino-uno'];
+}
+
+/** Hidden when it needs a board outside the build's VITE_ENABLED_BOARDS list. */
+function isExampleEnabled(example: ExampleProject): boolean {
+  return exampleBoardKinds(example).every(isBoardEnabled);
+}
+
 export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample }) => {
   const { t } = useTranslation();
   // The board filter lives in the URL (`/examples?board=xiao-esp32s3`) so a
@@ -106,6 +120,9 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
   useSyncExternalStore(subscribeProExamples, getProExamplesVersion, getProExamplesVersion);
   useSyncExternalStore(subscribeProBoards, getProBoardsVersion, getProBoardsVersion);
 
+  // Examples whose boards this build offers (VITE_ENABLED_BOARDS).
+  const examples = exampleProjects.filter(isExampleEnabled);
+
   // The static tabs cover the OSS boards; every other board kind that appears
   // in the (possibly overlay-extended) gallery gets a tab of its own, labelled
   // from the board registry. Without this, examples for runtime-registered
@@ -113,7 +130,7 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
   const boardTabs: BoardTab[] = (() => {
     const known = new Set(BOARD_TABS.map((tab) => tab.id));
     const extra: BoardTab[] = [];
-    for (const ex of exampleProjects) {
+    for (const ex of examples) {
       const bf = getBoardFilter(ex);
       if (known.has(bf)) continue;
       known.add(bf);
@@ -144,7 +161,7 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
   // matches come back best-first. See utils/searchMatch.
   const searchQuery = parseSearchQuery(search);
 
-  const browseOrder = exampleProjects
+  const browseOrder = examples
     .filter((example) => {
       const boardMatch =
         selectedBoard === 'all' ||
@@ -176,10 +193,10 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
 
   // Count per board for tab badges
   const boardCounts: Record<string, number> = {
-    all: exampleProjects.length,
-    retro: exampleProjects.filter(isRetro).length,
+    all: examples.length,
+    retro: examples.filter(isRetro).length,
   };
-  exampleProjects.forEach((ex) => {
+  examples.forEach((ex) => {
     const b = getBoardFilter(ex);
     boardCounts[b] = (boardCounts[b] ?? 0) + 1;
   });
@@ -377,12 +394,15 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
           onChange={(e) => setSelectedBoard(e.target.value)}
           aria-label={t('examples.filters.boardLabel', 'Board')}
         >
-          {boardTabs.map((tab) => (
-            <option key={tab.id} value={tab.id}>
-              {tab.id === 'all' ? t('examples.filters.allBoards', 'All boards') : tab.label}
-              {boardCounts[tab.id] != null ? ` (${boardCounts[tab.id]})` : ''}
-            </option>
-          ))}
+          {boardTabs
+            // A board allow-list leaves some tabs with nothing in them.
+            .filter((tab) => !isBoardAllowListActive() || tab.id === 'all' || boardCounts[tab.id])
+            .map((tab) => (
+              <option key={tab.id} value={tab.id}>
+                {tab.id === 'all' ? t('examples.filters.allBoards', 'All boards') : tab.label}
+                {boardCounts[tab.id] != null ? ` (${boardCounts[tab.id]})` : ''}
+              </option>
+            ))}
         </select>
 
         <select
