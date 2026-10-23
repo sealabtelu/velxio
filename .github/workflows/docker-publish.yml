@@ -73,6 +73,7 @@ jobs:
             ESPIDF_IMAGE=ghcr.io/davidmonterocrespo24/velxio-espidf-toolchain:latest
             VELXIO_LICENSE_KEY=${{ secrets.VELXIO_BUILD_LICENSE_KEY }}
             VELXIO_PROFILE=${{ vars.VELXIO_PROFILE || 'full' }}
+            VITE_ENABLED_BOARDS=${{ vars.VITE_ENABLED_BOARDS }}
           cache-from: type=gha
           # mode=min only stores the layers used in the final image. mode=max
           # also stores all intermediate layers, which doubles or triples the
