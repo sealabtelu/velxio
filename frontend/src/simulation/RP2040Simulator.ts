@@ -33,6 +33,7 @@ import type {
   UartRouting,
 } from './buses/types';
 import { boardPinsFromPinManager } from './buses/boardPins';
+import { requestFrame, cancelFrame } from './frameScheduler';
 
 /**
  * RP2040Simulator — Emulates Raspberry Pi Pico (RP2040) using rp2040js
@@ -521,6 +522,9 @@ export class RP2040Simulator implements LineCapable, BusCapableSimulator {
    * fabric; the parts themselves hear UART1 from its port.
    */
   public onSerialData: ((char: string, uart?: number) => void) | null = null;
+  /** Fires after the run loop stopped itself on an exception (the loop is already
+   *  stopped). Without it the UI kept showing the board as running, frozen. */
+  public onCrash: ((error: unknown) => void) | null = null;
 
   /** The line the console is clocking: UART0's PL011 settings on a compiled sketch
    *  (rate AND frame format), or the USB-CDC "no wire" link in MicroPython mode.
@@ -1618,13 +1622,14 @@ export class RP2040Simulator implements LineCapable, BusCapableSimulator {
       } catch (error) {
         console.error('[RP2040] Simulation error:', error);
         this.stop();
+        this.onCrash?.(error);
         return;
       }
 
-      this.animationFrame = requestAnimationFrame(execute);
+      this.animationFrame = requestFrame(execute);
     };
 
-    this.animationFrame = requestAnimationFrame(execute);
+    this.animationFrame = requestFrame(execute);
   }
 
   /**
@@ -1758,7 +1763,7 @@ export class RP2040Simulator implements LineCapable, BusCapableSimulator {
     if (!this.running) return;
     this.running = false;
     if (this.animationFrame !== null) {
-      cancelAnimationFrame(this.animationFrame);
+      cancelFrame(this.animationFrame);
       this.animationFrame = null;
     }
     // Force a new idle-HIGH seed on the next byte: the scope buffer is

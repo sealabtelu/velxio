@@ -15,6 +15,7 @@ import type { PinManager } from './PinManager';
 import { ExternalPinScopeFeed } from './externalPinScope';
 import { hexToUint8Array } from '../utils/hexParser';
 import { parseMergedFlashImage } from '../utils/esp32ImageParser';
+import { requestFrame, cancelFrame } from './frameScheduler';
 
 // ── ESP32-C3 Memory Map ──────────────────────────────────────────────────────
 const IROM_BASE = 0x42000000; // Flash instruction region (mapped via MMU)
@@ -166,6 +167,9 @@ export class Esp32C3Simulator {
 
   public pinManager: PinManager;
   public onSerialData: ((ch: string) => void) | null = null;
+  /** Fires after the run loop stopped itself on an exception (the loop is already
+   *  stopped). Without it the UI kept showing the board as running, frozen. */
+  public onCrash: ((error: unknown) => void) | null = null;
   public onBaudRateChange: ((baud: number) => void) | null = null;
   public onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
   /** The other half of that channel: levels the CIRCUIT applies (setPinState). */
@@ -1402,7 +1406,7 @@ export class Esp32C3Simulator {
 
   stop(): void {
     this.running = false;
-    cancelAnimationFrame(this.animFrameId);
+    cancelFrame(this.animFrameId);
   }
 
   reset(): void {
@@ -1452,22 +1456,31 @@ export class Esp32C3Simulator {
   private _loop(): void {
     if (!this.running) return;
 
-    // Execute in 1 ms chunks so FreeRTOS tick interrupts fire at ~1 kHz.
-    let rem = CYCLES_PER_FRAME;
-    while (rem > 0) {
-      const n = rem < CYCLES_PER_TICK ? rem : CYCLES_PER_TICK;
-      for (let i = 0; i < n; i++) {
-        this.core.step();
-      }
-      rem -= n;
+    try {
+      // Execute in 1 ms chunks so FreeRTOS tick interrupts fire at ~1 kHz.
+      let rem = CYCLES_PER_FRAME;
+      while (rem > 0) {
+        const n = rem < CYCLES_PER_TICK ? rem : CYCLES_PER_TICK;
+        for (let i = 0; i < n; i++) {
+          this.core.step();
+        }
+        rem -= n;
 
-      // Raise SYSTIMER TARGET0 alarm → routed through interrupt matrix.
-      this._stIntRaw |= 1;
-      if (this._stIntEna & 1) {
-        this._raiseIntSource(ETS_SYSTIMER_TARGET0_SRC);
+        // Raise SYSTIMER TARGET0 alarm → routed through interrupt matrix.
+        this._stIntRaw |= 1;
+        if (this._stIntEna & 1) {
+          this._raiseIntSource(ETS_SYSTIMER_TARGET0_SRC);
+        }
       }
+    } catch (error) {
+      // An exception here used to break the frame chain with `running` still
+      // true: a board that looked alive and never printed again.
+      console.error('[ESP32-C3] Simulation error:', error);
+      this.stop();
+      this.onCrash?.(error);
+      return;
     }
 
-    this.animFrameId = requestAnimationFrame(() => this._loop());
+    this.animFrameId = requestFrame(() => this._loop());
   }
 }
