@@ -56,6 +56,7 @@ import { hexToUint8Array } from '../utils/hexParser';
 import type { SerialLink } from '../store/serialWire';
 import { I2CBusManager, nullI2CMaster } from './I2CBusManager';
 import { boardPinsFromPinManager } from './buses/boardPins';
+import { requestFrame, cancelFrame } from './frameScheduler';
 
 /**
  * AVRSimulator - Emulates Arduino Uno (ATmega328p) using avr8js
@@ -871,6 +872,9 @@ export class AVRSimulator implements LineCapable, BusCapableSimulator {
 
   /** Serial output buffer — subscribers receive each byte or line */
   public onSerialData: ((char: string) => void) | null = null;
+  /** Fires after the run loop stopped itself on an exception (the loop is already
+   *  stopped). Without it the UI kept showing the board as running, frozen. */
+  public onCrash: ((error: unknown) => void) | null = null;
   /** Fires whenever the sketch changes the USART configuration (Serial.begin). Carries
    *  the full line — rate AND frame format — because a host terminal needs both to
    *  decode the wire, and `Serial.begin(9600, SERIAL_7E1)` is a legal sketch. */
@@ -1537,13 +1541,14 @@ export class AVRSimulator implements LineCapable, BusCapableSimulator {
       } catch (error) {
         console.error('Simulation error:', error);
         this.stop();
+        this.onCrash?.(error);
         return;
       }
 
-      this.animationFrame = requestAnimationFrame(execute);
+      this.animationFrame = requestFrame(execute);
     };
 
-    this.animationFrame = requestAnimationFrame(execute);
+    this.animationFrame = requestFrame(execute);
   }
 
   /**
@@ -1554,7 +1559,7 @@ export class AVRSimulator implements LineCapable, BusCapableSimulator {
 
     this.running = false;
     if (this.animationFrame !== null) {
-      cancelAnimationFrame(this.animationFrame);
+      cancelFrame(this.animationFrame);
       this.animationFrame = null;
     }
     this.scheduledPinChanges = [];

@@ -79,6 +79,30 @@ const BOARD_COLOR: Partial<Record<string, string>> = {
   attiny85: 'var(--color-feedback-warning)',
 };
 
+// Firmwares and the Pi's Linux console emit ANSI escapes the <pre> can't
+// render, so they leak through as literal text: SGR colour (`\x1b[0;32m`), and
+// — on the Pi shell — the DSR cursor-position query `\x1b[6n` plus cursor moves
+// / clears, which showed up as a stray `[6n` next to the prompt. Strip all CSI
+// sequences (and keypad-mode toggles); a raw log <pre> can't act on any of them
+// anyway. (xterm in PiTerminal still parses + answers them — this only cleans
+// the dumb mirror.) The last result is kept, so a render for anything else
+// (typing in the input) doesn't run the regexes over the output again.
+let lastRawSerial = '';
+let lastCleanSerial = '';
+function cleanSerialText(raw: string): string {
+  if (raw !== lastRawSerial) {
+    lastRawSerial = raw;
+    lastCleanSerial = raw
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .replace(/\x1b[=>]/g, '')
+      // Line-editing bytes the guest shell echoes (DEL on backspace, BEL, other
+      // C0 controls) render as tofu boxes in a <pre>; strip everything except
+      // \t \n \r.
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  }
+  return lastCleanSerial;
+}
+
 export const SerialMonitor: React.FC = () => {
   const { t } = useTranslation();
   const boards = useSimulatorStore((s) => s.boards);
@@ -88,8 +112,10 @@ export const SerialMonitor: React.FC = () => {
 
   // Active tab defaults to activeBoardId, updates when active board changes
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  // Track last-seen serial output length per board for unread dots
-  const [lastSeenLen, setLastSeenLen] = useState<Record<string, number>>({});
+  // The output each board had when its tab was last looked at, for unread dots.
+  // Compared by identity, not length: the store caps the kept output, so once
+  // a board fills it new bytes no longer make the string longer.
+  const [lastSeenOutput, setLastSeenOutput] = useState<Record<string, string>>({});
 
   const [inputValue, setInputValue] = useState('');
   const [lineEnding, setLineEnding] = useState<'none' | 'nl' | 'cr' | 'both'>('nl');
@@ -106,9 +132,9 @@ export const SerialMonitor: React.FC = () => {
     (boards.find((b) => b.id === activeTabId) ? activeTabId : boards[0]?.id) ?? null;
   const activeBoard = boards.find((b) => b.id === resolvedTabId);
 
-  // Snapshot the current length the moment a tab becomes active so any
+  // Snapshot the current output the moment a tab becomes active so any
   // future bytes register as unread on *other* tabs. Deliberately omits
-  // `activeBoard?.serialOutput.length` from the deps — the unread dot is
+  // `activeBoard?.serialOutput` from the deps — the unread dot is
   // already hidden on the active tab (`hasUnread && !isActive`), so there's
   // no need to re-snapshot on every byte arrival. Doing so under a high
   // serial rate (~600 bytes/s from `Serial.println` in a tight loop) drove
@@ -117,7 +143,7 @@ export const SerialMonitor: React.FC = () => {
     if (resolvedTabId) {
       const board = boards.find((b) => b.id === resolvedTabId);
       if (board) {
-        setLastSeenLen((prev) => ({ ...prev, [resolvedTabId]: board.serialOutput.length }));
+        setLastSeenOutput((prev) => ({ ...prev, [resolvedTabId]: board.serialOutput }));
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,7 +204,7 @@ export const SerialMonitor: React.FC = () => {
     setActiveTabId(boardId);
     const board = boards.find((b) => b.id === boardId);
     if (board) {
-      setLastSeenLen((prev) => ({ ...prev, [boardId]: board.serialOutput.length }));
+      setLastSeenOutput((prev) => ({ ...prev, [boardId]: board.serialOutput }));
     }
   };
 
@@ -200,7 +226,8 @@ export const SerialMonitor: React.FC = () => {
         {boards.map((board) => {
           const isActive = board.id === resolvedTabId;
           const color = BOARD_COLOR[board.boardKind] ?? 'var(--wb-10)';
-          const hasUnread = board.serialOutput.length > (lastSeenLen[board.id] ?? 0);
+          const hasUnread =
+            board.serialOutput !== '' && board.serialOutput !== (lastSeenOutput[board.id] ?? '');
           return (
             <button
               key={board.id}
@@ -284,21 +311,7 @@ export const SerialMonitor: React.FC = () => {
         <pre ref={outputRef} style={styles.output}>
           {activeBoard?.serialOutput
             ? (() => {
-                // Firmwares and the Pi's Linux console emit ANSI escapes the
-                // <pre> can't render, so they leak through as literal text:
-                // SGR colour (`\x1b[0;32m`), and — on the Pi shell — the DSR
-                // cursor-position query `\x1b[6n` plus cursor moves / clears,
-                // which showed up as a stray `[6n` next to the prompt. Strip
-                // all CSI sequences (and keypad-mode toggles); a raw log <pre>
-                // can't act on any of them anyway. (xterm in PiTerminal still
-                // parses + answers them — this only cleans the dumb mirror.)
-                const text = activeBoard.serialOutput
-                  .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-                  .replace(/\x1b[=>]/g, '')
-                  // Line-editing bytes the guest shell echoes (DEL on
-                  // backspace, BEL, other C0 controls) render as tofu boxes
-                  // in a <pre>; strip everything except \t \n \r.
-                  .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+                const text = cleanSerialText(activeBoard.serialOutput);
                 // ESP32 (QEMU slirp) hands out 192.168.4.x; the Pico W virtual
                 // net hands out 10.13.37.x. Both reach their emulated server
                 // through the same /api/gateway proxy, so linkify either subnet.

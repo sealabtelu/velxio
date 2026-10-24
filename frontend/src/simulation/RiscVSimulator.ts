@@ -11,6 +11,7 @@
 import { RiscVCore } from './RiscVCore';
 import { PinManager } from './PinManager';
 import { hexToUint8Array } from '../utils/hexParser';
+import { requestFrame, cancelFrame } from './frameScheduler';
 
 // CH32V003 memory map
 const FLASH_BASE = 0x08000000;
@@ -173,7 +174,7 @@ export class RiscVSimulator {
 
   stop(): void {
     this.running = false;
-    cancelAnimationFrame(this.animFrameId);
+    cancelFrame(this.animFrameId);
   }
 
   reset(): void {
@@ -204,6 +205,6 @@ export class RiscVSimulator {
     for (let i = 0; i < CYCLES_PER_FRAME; i++) {
       this.core.step();
     }
-    this.animFrameId = requestAnimationFrame(() => this._loop());
+    this.animFrameId = requestFrame(() => this._loop());
   }
 }

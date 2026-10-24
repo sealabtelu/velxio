@@ -8,12 +8,18 @@
  * that fast and eventually throws "Maximum update depth exceeded" from any
  * effect whose deps include `serialOutput.length`.
  *
- * Fix: buffer chars in memory, flush once per `requestAnimationFrame` (≤60 Hz).
+ * Fix: buffer chars in memory, flush once per animation frame (≤60 Hz).
  * No semantic change — the buffer preserves byte order and groups by board.
  *
- * In non-browser environments (Vitest, Node) `requestAnimationFrame` is
- * typically polyfilled to `setTimeout(…, 0)`, which also coalesces correctly.
+ * Frames come from frameScheduler, not raw requestAnimationFrame: a page that
+ * is not being painted (background tab, iframe scrolled offscreen) gets no
+ * frames, and the monitor used to stop updating while a QEMU board kept
+ * sending. Where there is no requestAnimationFrame when the batcher is created
+ * (Node, Vitest before a test stubs it) it uses `setTimeout(…, 0)`, decided
+ * once — the store tests rely on that to flush under a no-op rAF stub.
  */
+
+import { requestFrame } from '../simulation/frameScheduler';
 
 export type BatchFlush = (perBoard: Map<string, string>) => void;
 
@@ -27,10 +33,10 @@ export function createSerialBatcher(flush: BatchFlush): SerialBatcher {
   const buf = new Map<string, string>();
   let scheduled = false;
 
-  const raf: (cb: () => void) => void =
+  const schedule: (cb: () => void) => void =
     typeof requestAnimationFrame === 'function'
       ? (cb) => {
-          requestAnimationFrame(cb);
+          requestFrame(cb);
         }
       : (cb) => {
           setTimeout(cb, 0);
@@ -49,7 +55,7 @@ export function createSerialBatcher(flush: BatchFlush): SerialBatcher {
       buf.set(boardId, (buf.get(boardId) ?? '') + ch);
       if (!scheduled) {
         scheduled = true;
-        raf(doFlush);
+        schedule(doFlush);
       }
     },
     flushNow() {

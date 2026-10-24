@@ -1837,6 +1837,7 @@ function createSimulator(
   onSerial: (ch: string) => void,
   onBaud: (baud: number, link: SerialLink) => void,
   onPinTime: (pin: number, state: boolean, t: number) => void,
+  onCrash: (error: unknown) => void,
 ): AVRSimulator | RP2040Simulator | RiscVSimulator | Esp32C3Simulator | ProBoardSimulator {
   let sim: AVRSimulator | RP2040Simulator | RiscVSimulator | Esp32C3Simulator | ProBoardSimulator;
   const proDef = getProBoard(boardKind);
@@ -1861,6 +1862,7 @@ function createSimulator(
   // carries the same slot; the ESP32 engines report through their bridge instead.
   if ('onBaudRateChange' in sim) (sim as SerialLineReporter).onBaudRateChange = onBaud;
   sim.onPinChangeWithTime = onPinTime;
+  if ('onCrash' in sim) (sim as { onCrash: ((error: unknown) => void) | null }).onCrash = onCrash;
   return sim;
 }
 
@@ -1886,6 +1888,22 @@ const INITIAL_BOARD: BoardInstance = {
 // ~200 Hz emit ~600 bytes/s, and a raw `set()` per byte overwhelms React's
 // useSyncExternalStore reconciliation (→ "Maximum update depth exceeded").
 // The batcher coalesces chunks per animation frame (≤60 Hz), grouped by board.
+//
+// The kept output is capped. It used to grow for as long as the sketch printed,
+// and every flush copies it and the monitor re-renders all of it, so a sketch
+// printing in loop() for ten minutes (~6 MB at 115200) spent the whole frame
+// there: the monitor froze and the CPU loop sharing the main thread crawled.
+const SERIAL_KEEP_CHARS = 128 * 1024;
+
+/** The newest SERIAL_KEEP_CHARS of `out`, starting on a whole line when one
+ *  begins close to the cut (one giant line is cut mid-way, not dropped). */
+function keepSerialTail(out: string): string {
+  if (out.length <= SERIAL_KEEP_CHARS) return out;
+  const cut = out.length - SERIAL_KEEP_CHARS;
+  const nl = out.indexOf('\n', cut);
+  return out.slice(nl !== -1 && nl - cut < 1024 ? nl + 1 : cut);
+}
+
 const { append: appendSerial } = createSerialBatcher((perBoard) => {
   for (const [id, raw] of perBoard) emitSerialTap(id, raw);
   useSimulatorStore.setState((s) => {
@@ -1900,8 +1918,8 @@ const { append: appendSerial } = createSerialBatcher((perBoard) => {
       // Attach the one-line explanation when a known cryptic firmware error
       // scrolls past (issue #270); a no-op for ordinary output.
       const chunk = annotateSerialChunk(b.serialOutput, wired);
-      if (s.activeBoardId === b.id) globalOut += chunk;
-      return { ...b, serialOutput: b.serialOutput + chunk };
+      if (s.activeBoardId === b.id) globalOut = keepSerialTail(globalOut + chunk);
+      return { ...b, serialOutput: keepSerialTail(b.serialOutput + chunk) };
     });
     return { boards, serialOutput: globalOut };
   });
@@ -1933,6 +1951,25 @@ export function appendSimulatorNote(boardId: string, text: string): void {
   const onSerial = bridgeMap.get(boardId)?.onSerialData;
   if (onSerial) onSerial(line);
   else appendSerial(boardId, line);
+}
+
+/**
+ * An in-browser engine's run loop stopped itself on an exception. The board
+ * used to keep `running: true`: a frozen simulation with a live Stop button
+ * and a monitor waiting for bytes that would never come.
+ */
+function reportSimulatorCrash(boardId: string, error: unknown): void {
+  // Deferred: an engine that runs its first frame inside start() can crash
+  // before startBoard marks the board running, and that later set would win.
+  queueMicrotask(() => {
+    useSimulatorStore.setState((s) => {
+      const boards = s.boards.map((b) => (b.id === boardId ? { ...b, running: false } : b));
+      const isActive = s.activeBoardId === boardId;
+      return { boards, ...(isActive ? { running: false } : {}) };
+    });
+    const reason = error instanceof Error ? error.message : String(error);
+    appendSimulatorNote(boardId, `The simulation stopped: ${reason}`);
+  });
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────
@@ -2172,6 +2209,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
       });
     },
     getOscilloscopeCallback(INITIAL_BOARD_ID),
+    (error) => reportSimulatorCrash(INITIAL_BOARD_ID, error),
   );
   // Cross-board routing for the initial board is handled by the Interconnect
   // (registered after the store is created — see bottom of this file).
@@ -2407,6 +2445,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
             });
           },
           getOscilloscopeCallback(id),
+          (error) => reportSimulatorCrash(id, error),
         );
         // Cross-board routing now handled by Interconnect (see bind below).
         simulatorMap.set(id, sim);
@@ -3825,6 +3864,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
               return { boards, serialBaudRate: baud };
             }),
           getOscilloscopeCallback(boardId),
+          (error) => reportSimulatorCrash(boardId, error),
         );
         simulatorMap.set(boardId, sim);
         // The Interconnect's serial fan-out wraps the INSTANCE's
@@ -3947,6 +3987,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
               return { boards, serialBaudRate: baud };
             }),
           getOscilloscopeCallback(boardId),
+          (error) => reportSimulatorCrash(boardId, error),
         );
         simulatorMap.set(boardId, sim);
         // The Interconnect's serial fan-out wraps the INSTANCE's
