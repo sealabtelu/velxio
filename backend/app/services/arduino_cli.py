@@ -138,6 +138,27 @@ def humanize_cli_error(raw: str | None, *, action: str = "run arduino-cli") -> s
     return f"Could not {action}: {first[:300]}"
 
 
+def _compile_jobs_args() -> list[str]:
+    """`--jobs N` for `arduino-cli compile`, from VELXIO_ARDUINO_JOBS.
+
+    arduino-cli defaults to one gcc process per CPU core for EVERY compile, so
+    peak memory is roughly (build slots x cores x one cc1plus). The build queue
+    caps the slots; this caps the per-build fan-out. Unset or 0 keeps
+    arduino-cli's own default (all cores).
+    """
+    raw = os.environ.get("VELXIO_ARDUINO_JOBS", "").strip()
+    if not raw:
+        return []
+    try:
+        jobs = int(raw)
+    except ValueError:
+        print(f"[arduino-cli] VELXIO_ARDUINO_JOBS={raw!r} is not an integer; ignoring")
+        return []
+    if jobs <= 0:
+        return []
+    return ["--jobs", str(min(jobs, 64))]
+
+
 def _discard_sketch_build_cache(sketch_dir: Path) -> None:
     """Remove the per-sketch build cache arduino-cli left for this compile.
 
@@ -676,10 +697,12 @@ class ArduinoCLIService:
                            # this define restores it as uint8_t (the type it was).
                            "--build-property",
                            "compiler.cpp.extra_flags=-DBitOrder=uint8_t",
+                           *_compile_jobs_args(),
                            "--output-dir", str(build_dir),
                            str(sketch_dir)]
                 else:
                     cmd = [self.cli_path, "compile", "--fqbn", board_fqbn,
+                           *_compile_jobs_args(),
                            "--output-dir", str(build_dir),
                            str(sketch_dir)]
                 print(f"Running command: {' '.join(cmd)}")

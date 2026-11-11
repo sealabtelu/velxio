@@ -39,6 +39,15 @@ services:
       # to disable without rebuilding the image (fallback to per-compile
       # tempfile.TemporaryDirectory behaviour).
       - VELXIO_PERSISTENT_BUILD_DIR=1
+      # Build queue (app/services/build_queue.py). Compiles beyond these
+      # slots wait in line instead of running at once. LIGHT = arduino-cli
+      # boards (AVR, RP2040, ...), HEAVY = ESP-IDF; the two lanes run
+      # independently. Lower them if the host runs out of memory.
+      - VELXIO_LIGHT_BUILD_SLOTS=1
+      - VELXIO_HEAVY_BUILD_SLOTS=1
+      # Max parallel gcc processes inside ONE arduino-cli compile. Unset/0 =
+      # one per CPU core, which multiplies memory by the core count.
+      - VELXIO_ARDUINO_JOBS=2
     volumes:
       - ./data:/app/data
       - arduino-libs:/root/.arduino15
